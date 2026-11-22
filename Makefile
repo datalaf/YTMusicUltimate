@@ -16,7 +16,7 @@ $(TWEAK_NAME)_FILES = $(filter-out Source/Sideloading.x, $(shell find Source \( 
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -DTWEAK_VERSION=$(PACKAGE_VERSION)
 $(TWEAK_NAME)_FRAMEWORKS = UIKit Foundation AVFoundation AudioToolbox VideoToolbox
 $(TWEAK_NAME)_OBJ_FILES = $(shell find Source/Utils/lib -name '*.a')
-$(TWEAK_NAME)_LIBRARIES = bz2 c++ iconv z
+$(TWEAK_NAME)_LIBRARIES = bz2 c++ iconv z sqlite3
 ifeq ($(SIDELOADING),1)
 $(TWEAK_NAME)_FILES += Source/Sideloading.x
 endif
