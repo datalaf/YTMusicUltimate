@@ -146,7 +146,30 @@ static NSString *YTMUCSVField(NSString *value) {
             NSLog(@"[YTMusicUltimate] Listening stats: save failed: %s", sqlite3_errmsg(self->_db));
         }
         sqlite3_finalize(stmt);
+
+        [self fillMissingMetadataFromListen:snapshot];
     });
+}
+
+// Runs on _queue. Earlier listens of the same song that were saved without a
+// title or artist get them from this one.
+- (void)fillMissingMetadataFromListen:(YTMUStatsListen *)listen {
+    if (listen.title.length == 0) return;
+
+    const char *sql =
+        "UPDATE plays SET "
+        "  title = COALESCE(NULLIF(title, ''), ?), "
+        "  artist = COALESCE(NULLIF(artist, ''), ?) "
+        "WHERE video_id = ? AND (title IS NULL OR title = '' OR artist IS NULL OR artist = '');";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(_db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+
+    YTMUBindText(stmt, 1, listen.title);
+    YTMUBindText(stmt, 2, listen.artist);
+    YTMUBindText(stmt, 3, listen.videoID);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 }
 
 - (void)clearAllWithCompletion:(void (^)(void))completion {
@@ -189,13 +212,15 @@ static NSString *YTMUCSVField(NSString *value) {
     return summary;
 }
 
-// Runs on _queue. Title and artist come from the most recent listen of each song
-// (SQLite takes bare columns from the row that matched MAX()).
+// Runs on _queue. Title and artist come from the most recent counted play of each
+// song (SQLite takes bare columns from the row that matched MAX()); HAVING
+// guarantees there is one.
 - (NSArray<NSDictionary *> *)topSongsSince:(NSTimeInterval)since limit:(NSInteger)limit {
     NSMutableArray *rows = [NSMutableArray array];
 
     const char *sql =
-        "SELECT video_id, title, artist, MAX(started_at), SUM(counted) AS plays, SUM(listened) AS seconds "
+        "SELECT video_id, title, artist, MAX(CASE WHEN counted = 1 THEN started_at END), "
+        "  SUM(counted) AS plays, SUM(listened) AS seconds "
         "FROM plays WHERE started_at >= ? "
         "GROUP BY video_id HAVING plays > 0 "
         "ORDER BY plays DESC, seconds DESC LIMIT ?;";

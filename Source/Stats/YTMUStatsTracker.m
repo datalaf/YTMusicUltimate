@@ -1,6 +1,7 @@
 #import "YTMUStatsTracker.h"
 #import "YTMUStatsStore.h"
 #import <UIKit/UIKit.h>
+#import <MediaPlayer/MediaPlayer.h>
 
 NSString *const YTMUStatsEnabledKey = @"listeningStats";
 
@@ -14,6 +15,17 @@ static const double kSaveInterval = 15.0;
 static const double kMinSavedListen = 1.0;
 // How long the cached on/off preference is trusted.
 static const NSTimeInterval kPrefsCacheTime = 5.0;
+// How often to look at the lock-screen info while a song's title or artist is still missing.
+static const NSTimeInterval kNowPlayingReadInterval = 1.0;
+// Durations that differ by more than this belong to different songs.
+static const double kDurationTolerance = 3.0;
+// Without durations to compare, trust the lock-screen info only after this much listening,
+// by which time it has switched over from the previous song.
+static const double kNowPlayingSettleTime = 5.0;
+
+static NSString *YTMUStringValue(id value) {
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
 
 static NSString *YTMUCleanArtist(NSString *artist) {
     if (artist.length == 0) return nil;
@@ -31,6 +43,7 @@ static NSString *YTMUCleanArtist(NSString *artist) {
 @property (nonatomic, assign) double lastSavedListened;
 @property (nonatomic, assign) BOOL enabled;
 @property (nonatomic, assign) NSTimeInterval prefsReadAt;
+@property (nonatomic, assign) NSTimeInterval nowPlayingReadAt;
 @end
 
 @implementation YTMUStatsTracker
@@ -95,6 +108,7 @@ static NSString *YTMUCleanArtist(NSString *artist) {
     NSString *cleanArtist = YTMUCleanArtist(artist);
     if (cleanArtist.length > 0) listen.artist = cleanArtist;
     if (duration > listen.duration) listen.duration = duration;
+    [self fillMetadataFromNowPlaying:listen];
 
     double delta = mediaTime - self.lastMediaTime;
     self.lastMediaTime = mediaTime;
@@ -125,6 +139,32 @@ static NSString *YTMUCleanArtist(NSString *artist) {
     self.current = listen;
     self.lastMediaTime = mediaTime;
     self.lastSavedListened = 0;
+}
+
+// The player's own video details don't carry the title in every YouTube Music
+// version, so fall back to what the app shows on the lock screen and in Control Center.
+- (void)fillMetadataFromNowPlaying:(YTMUStatsListen *)listen {
+    if (listen.title.length > 0 && listen.artist.length > 0) return;
+
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - self.nowPlayingReadAt < kNowPlayingReadInterval) return;
+    self.nowPlayingReadAt = now;
+
+    NSDictionary *info = [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo;
+    NSString *title = YTMUStringValue(info[MPMediaItemPropertyTitle]);
+    NSString *artist = YTMUStringValue(info[MPMediaItemPropertyArtist]);
+    if (title.length == 0) return;
+
+    // Right after a song change the lock-screen info can still describe the previous song.
+    double infoDuration = [info[MPMediaItemPropertyPlaybackDuration] doubleValue];
+    if (infoDuration > 0 && listen.duration > 0) {
+        if (fabs(infoDuration - listen.duration) > kDurationTolerance) return;
+    } else if (listen.listened < kNowPlayingSettleTime) {
+        return;
+    }
+
+    if (listen.title.length == 0) listen.title = title;
+    if (listen.artist.length == 0) listen.artist = YTMUCleanArtist(artist);
 }
 
 - (double)thresholdForDuration:(double)duration {
